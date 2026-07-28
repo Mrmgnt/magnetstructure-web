@@ -1,4 +1,4 @@
-﻿/* eslint-disable react-refresh/only-export-components */
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 
 const STORAGE_KEY = 'magnetstructure-theme-v1'
@@ -39,4 +39,3 @@ export function useTheme() {
   if (!theme) throw new Error('useTheme must be used inside ThemeProvider')
   return theme
 }
-

@@ -1,4 +1,4 @@
-﻿import { MAX_AI_PAYLOAD_BYTES } from './reference-utils.js'
+import { MAX_AI_PAYLOAD_BYTES } from './reference-utils.js'
 
 function utf8Size(value) {
   return new TextEncoder().encode(value).byteLength
@@ -69,5 +69,3 @@ export async function analyzeProject(project, kind = 'discovery') {
   }
   return { ...normalizeAiResponse(body), mode: body.mode || 'ai' }
 }
-
-

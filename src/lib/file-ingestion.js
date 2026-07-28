@@ -1,4 +1,4 @@
-﻿import JSZip from 'jszip'
+import JSZip from 'jszip'
 import * as pdfjsLib from 'pdfjs-dist'
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { MAX_ARCHIVE_ENTRIES, MAX_ARCHIVE_TEXT_BYTES, MAX_ARCHIVE_UNCOMPRESSED_BYTES, MAX_FILE_BYTES, MAX_TEXT_BYTES, formatBytes, hasSensitivePattern, isAllowedFile, isBlockedArchivePath, isImagePath, isTextLikePath } from './reference-utils'
@@ -157,7 +157,3 @@ export async function processReferenceFile(file, category, id) {
   if (result.sensitiveWarning) result.warningMessage = 'Indikasi secret terdeteksi; value tidak disimpan atau dikirim.'
   return result
 }
-
-
-
-
