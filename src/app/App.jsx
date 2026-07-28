@@ -1,4 +1,4 @@
-﻿import { useCallback, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { Route, Routes } from './router'
 import { AppShell, DashboardShell } from '../components/ui'
 import { createInitialProject } from './planning-data'
@@ -13,7 +13,7 @@ export default function App() {
     <Routes>
       <Route path="/" element={<DashboardShell><DashboardPage /></DashboardShell>} />
       <Route path="/planning/references" element={planningPage(<ReferencesPage project={project} setProject={setProject} />)} />
-      <Route path="/planning/discovery" element={planningPage(<DiscoveryPage project={project} />)} />
+      <Route path="/planning/discovery" element={planningPage(<DiscoveryPage project={project} setProject={setProject} />)} />
       <Route path="/planning/questions" element={planningPage(<QuestionsPage project={project} setProject={setProject} />)} />
       <Route path="/planning/structure" element={planningPage(<StructurePage project={project} setProject={setProject} />)} />
       <Route path="/planning/preview" element={planningPage(<PreviewPage project={project} />)} />
@@ -23,4 +23,3 @@ export default function App() {
     </Routes>
   )
 }
-

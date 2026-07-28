@@ -5,3 +5,5 @@
 | TST-MENU-003-001 | Buka route | Konten/CTA tampil |
 | TST-MENU-003-002 | Primary action | State/route benar |
 | TST-MENU-003-003 | Keyboard/mobile | Operable tanpa overflow |
+
+Tambahan phase 2: drag-and-drop, multi-file, PDF/image, ZIP whitelist, AI optional, dan dark mode.

@@ -1,16 +1,17 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Link, useNavigate } from '../app/router'
-import { countMenus, demoReferences, generationSteps, nextStableId } from '../app/planning-data'
+import { countMenus, demoReferences, describeAnswer, generationSteps, nextStableId, nextReferenceId, referenceCategories } from '../app/planning-data'
 import { buildPlanningFiles, previewTree } from '../lib/planning-content'
+import { analyzeProject } from '../lib/ai-client'
 import { downloadPlanningZip } from '../lib/zip'
-import { ConfirmDialog, EmptyState, FileUploadCard, Icon, PageHeader, PlanningTree, StatusBadge, StepActions } from '../components/ui'
+import { ConfirmDialog, EmptyState, Icon, PageHeader, PlanningTree, ReferenceUploadCard, StatusBadge, StepActions } from '../components/ui'
 
 export function DashboardPage() {
   const flowCards = [
-    ['01', 'Kumpulkan konteks', 'Reference lokal atau data contoh.'],
-    ['02', 'Pisahkan temuan', 'Fact, inference, dan unknown.'],
-    ['03', 'Lengkapi slot', 'Pertanyaan adaptif yang dapat diedit.'],
+    ['01', 'Kumpulkan konteks', 'Reference lokal atau data contoh. Mendukung PDF, image, dan ZIP.'],
+    ['02', 'Pisahkan temuan', 'Fact, inference, dan unknown; AI optional bila dikonfigurasi.'],
+    ['03', 'Lengkapi slot', 'Pertanyaan pilihan ganda, essay, dan Lainnya.'],
     ['04', 'Susun struktur', 'Module dan menu dengan ID stabil.'],
     ['05', 'Review planning', 'Preview tree dan test matrix.'],
     ['06', 'Generate paket', 'ZIP valid, dibuat di browser.'],
@@ -21,7 +22,7 @@ export function DashboardPage() {
         <motion.div className="hero-copy" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
           <p className="eyebrow">Developer planning workspace</p>
           <h1>Planning project,<br /><span>lebih terstruktur.</span></h1>
-          <p>Bangun module, menu, standar, dan test plan sebelum coding dimulai. Transparan, deterministic, dan siap direview.</p>
+          <p>Bangun module, menu, standar, dan test plan sebelum coding dimulai. Upload PRD, design, dan project source; kerja tetap bisa berjalan tanpa AI.</p>
           <div className="hero-actions">
             <Link className="button primary large" to="/planning/references">Mulai planning <Icon name="arrow" /></Link>
             <a className="button ghost large" href="#workflow">Lihat workflow</a>
@@ -36,7 +37,7 @@ export function DashboardPage() {
       </section>
 
       <section id="workflow" className="dashboard-section">
-        <div className="section-heading"><div><p className="eyebrow">Alur kerja</p><h2>Dari referensi ke paket planning</h2></div><p>Enam checkpoint ringkas. Tidak ada black box atau request AI tersembunyi.</p></div>
+        <div className="section-heading"><div><p className="eyebrow">Alur kerja</p><h2>Dari referensi ke paket planning</h2></div><p>Enam checkpoint ringkas. Drag-and-drop, multi-file, dan mode gelap tersedia.</p></div>
         <div className="flow-grid">{flowCards.map(([number, title, description]) => <article key={number} className="flow-card"><span className="mono">{number}</span><h3>{title}</h3><p>{description}</p></article>)}</div>
       </section>
 
@@ -52,45 +53,51 @@ export function DashboardPage() {
 
 export function ReferencesPage({ project, setProject }) {
   const [message, setMessage] = useState('')
-  const targets = [
-    ['prd.md', 'Product requirement', 'Goal, scope, users, dan business rules.'],
-    ['design.md', 'Design reference', 'Visual direction, layout, dan interaction.'],
-    ['api-reference.yaml', 'API reference', 'Optional contract untuk future integration.'],
-  ]
+  const [draggingCategory, setDraggingCategory] = useState(null)
+  const [busy, setBusy] = useState(false)
 
-  async function handleFiles(slot, fileList) {
-    const file = fileList?.[0]
-    if (!file) return
-    if (!/\.(md|markdown|txt|json|ya?ml)$/i.test(file.name)) {
-      setMessage('Format file tidak didukung. Gunakan md, markdown, txt, json, yaml, atau yml.')
-      return
-    }
-    let hasSensitivePattern = /api[_-]?key|token|password|secret/i.test(file.name)
-    if (file.size <= 250000) {
+  async function ingest(category, fileList) {
+    const files = Array.from(fileList || [])
+    if (!files.length) return
+    setBusy(true)
+    setMessage(`Memproses ${files.length} file...`)
+    const accepted = []
+    const errors = []
+    for (const file of files) {
       try {
-        const text = await file.text()
-        hasSensitivePattern ||= /api[_-]?key|token|password|secret/i.test(text)
-      } catch {
-        setMessage('Metadata file diterima, tetapi content tidak dapat dibaca untuk warning lokal.')
+        const id = nextReferenceId([...project.references, ...accepted])
+        const processed = await processReferenceFileSafe(file, category, id)
+        accepted.push(processed)
+      } catch (error) {
+        const id = nextReferenceId([...project.references, ...accepted])
+        accepted.push({ id, category, name: file.name, type: file.type || 'Tipe tidak diketahui', size: file.size, status: 'error', source: 'Upload browser', sensitiveWarning: false, warningMessage: error.message, extractedText: '', imageData: [], archive: null, rawFile: file })
+        errors.push(`${file.name}: ${error.message}`)
       }
     }
-    setProject((current) => {
-      const remaining = current.references.filter((reference) => reference.slot !== slot)
-      return {
-        ...current,
-        references: [...remaining, {
-          id: `REF-${String(remaining.length + 1).padStart(3, '0')}`,
-          slot,
-          name: file.name,
-          type: file.type || 'Tipe tidak diketahui',
-          size: file.size,
-          status: hasSensitivePattern ? 'Peringatan' : 'Siap',
-          source: 'Upload browser',
-          sensitiveWarning: hasSensitivePattern,
-        }],
-      }
-    })
-    setMessage(hasSensitivePattern ? 'File ditambahkan dengan warning. Value sensitif tidak disimpan.' : 'Reference ditambahkan. Analisis tetap demo lokal.')
+    if (accepted.length) {
+      setProject((current) => {
+        const merged = [...current.references, ...accepted]
+        return { ...current, references: merged }
+      })
+    }
+    setBusy(false)
+    if (errors.length) setMessage(`Sebagian file gagal diproses. ${errors.join(' · ')}`)
+    else if (accepted.length) setMessage(`${accepted.length} reference ditambahkan pada ${category}. Secret hanya warning, tidak disimpan.`)
+  }
+
+  async function processReferenceFileSafe(file, category, id) {
+    const { processReferenceFile } = await import('../lib/file-ingestion')
+    return processReferenceFile(file, category, id)
+  }
+
+  function removeReference(id) {
+    setProject((current) => ({ ...current, references: current.references.filter((reference) => reference.id !== id) }))
+    setMessage('Reference dihapus.')
+  }
+
+  function clearCategory(category) {
+    setProject((current) => ({ ...current, references: current.references.filter((reference) => reference.category !== category) }))
+    setMessage(`Reference kategori ${category} dibersihkan.`)
   }
 
   function useDemo() {
@@ -99,12 +106,29 @@ export function ReferencesPage({ project, setProject }) {
   }
 
   const canContinue = project.references.length > 0
+
   return (
     <>
-      <PageHeader eyebrow="Langkah 1 · References" title="Mulai dari konteks yang tersedia." description="Tambahkan reference lokal. Browser hanya menyimpan metadata dan status selama sesi ini." actions={<button className="button secondary" type="button" onClick={useDemo}><Icon name="spark" size={16} />Gunakan data contoh</button>} />
-      <div className="privacy-banner"><Icon name="alert" size={17} /><div><strong>Private by default</strong><span>Reference tidak dikirim keluar browser. Warning secret hanya pemeriksaan regex lokal.</span></div></div>
+      <PageHeader eyebrow="Langkah 1 · References" title="Kumpulkan konteks project." description="Drag-and-drop atau pilih file. PRD menerima text, PDF, dan image. Design dan project mendukung ZIP. Semua kategori bersifat optional; minimal satu file atau ZIP untuk lanjut." actions={<button className="button secondary" type="button" onClick={useDemo} disabled={busy}><Icon name="spark" size={16} />Gunakan data contoh</button>} />
+      <div className="privacy-banner"><Icon name="alert" size={17} /><div><strong>Private by default</strong><span>Reference diproses di browser. Bila AI aktif, hanya ringkasan teks dan preview image yang dikirim ke /api/analyze.</span></div></div>
       <section className="upload-grid" aria-label="Reference upload">
-        {targets.map(([slot, label, help]) => <FileUploadCard key={slot} slot={slot} label={label} help={help} reference={project.references.find((reference) => reference.slot === slot)} onFiles={handleFiles} />)}
+        {referenceCategories.map((target) => (
+          <ReferenceUploadCard
+            key={target.id}
+            category={target.id}
+            label={target.label}
+            help={target.help}
+            optional={target.optional}
+            references={project.references.filter((reference) => reference.category === target.id)}
+            dragging={draggingCategory === target.id}
+            busy={busy}
+            onFiles={(files) => ingest(target.id, files)}
+            onRemove={removeReference}
+            onRetry={(reference) => reference.rawFile ? ingest(target.id, [reference.rawFile]) : setMessage('Pilih ulang file untuk retry processing.')}
+            onClear={() => clearCategory(target.id)}
+            onDragStateChange={(active) => setDraggingCategory(active ? target.id : null)}
+          />
+        ))}
       </section>
       <section className="output-section">
         <div><p className="eyebrow">Output mode</p><h2>Pilih bentuk hasil planning</h2></div>
@@ -116,27 +140,63 @@ export function ReferencesPage({ project, setProject }) {
         ].map(([value, label, help]) => <label key={value} className={`output-option${project.outputMode === value ? ' selected' : ''}`}><input type="radio" name="output-mode" value={value} checked={project.outputMode === value} onChange={() => setProject((current) => ({ ...current, outputMode: value }))} /><span><strong>{label}</strong><small>{help}</small></span></label>)}</fieldset>
       </section>
       <p className="live-message" aria-live="polite">{message}</p>
-      {!canContinue && <EmptyState icon="file" title="Belum ada reference" description="Upload satu file atau aktifkan data contoh untuk melanjutkan." />}
-      <StepActions backTo="/" nextTo="/planning/discovery" nextLabel="Lanjut ke discovery" disabled={!canContinue} />
+      {!canContinue && <EmptyState icon="file" title="Belum ada reference" description="Upload minimal satu file atau ZIP, atau aktifkan data contoh untuk melanjutkan." />}
+      <StepActions backTo="/" nextTo="/planning/discovery" nextLabel="Lanjut ke discovery" disabled={!canContinue || busy} />
     </>
   )
 }
 
-export function DiscoveryPage({ project }) {
+export function DiscoveryPage({ project, setProject }) {
+  const [analyzing, setAnalyzing] = useState(false)
+  const [error, setError] = useState('')
+
+  async function runAnalysis() {
+    setAnalyzing(true)
+    setError('')
+    try {
+      const result = await analyzeProject(project, 'discovery')
+      setProject((current) => ({
+        ...current,
+        aiMode: result.mode,
+        aiWarnings: result.warnings,
+        discovery: {
+          facts: result.facts.length ? result.facts : current.discovery.facts,
+          inferences: result.inferences.length ? result.inferences : current.discovery.inferences,
+          unknowns: result.unknowns.length ? result.unknowns : current.discovery.unknowns,
+        },
+      }))
+    } catch (analysisError) {
+      setError(analysisError.code === 'AI_NOT_CONFIGURED' ? '' : analysisError.message)
+      setProject((current) => ({ ...current, aiMode: 'local', aiWarnings: [] }))
+    } finally {
+      setAnalyzing(false)
+    }
+  }
+
   const columns = [
     ['facts', 'Fact', 'green', 'Informasi disetujui dari prompt atau reference.'],
-    ['inferences', 'Inference', 'blue', 'Kesimpulan lokal untuk ditinjau, bukan fakta baru.'],
+    ['inferences', 'Inference', 'blue', 'Kesimpulan lokal/AI untuk ditinjau, bukan fakta baru.'],
     ['unknowns', 'Unknown', 'amber', 'Keputusan belum tersedia dan tidak direka.'],
   ]
+  const modeBadge = project.aiMode === 'ai' ? { tone: 'green', label: 'Analisis AI' } : project.aiMode === 'local' ? { tone: 'blue', label: 'Analisis lokal' } : { tone: 'neutral', label: 'AI belum dikonfigurasi' }
+
   return (
     <>
-      <PageHeader eyebrow="Langkah 2 · Discovery" title="Pisahkan yang pasti dari yang belum diketahui." description="Analisis demo lokal menjaga Fact, Inference, dan Unknown tetap terlihat sebagai kategori berbeda." actions={<StatusBadge tone="blue">Analisis demo lokal</StatusBadge>} />
+      <PageHeader eyebrow="Langkah 2 · Discovery" title="Pisahkan yang pasti dari yang belum diketahui." description="Buka Analisis AI bila Vercel env sudah diisi. Tanpa konfigurasi AI, gunakan analisis lokal." actions={<StatusBadge tone={modeBadge.tone}>{modeBadge.label}</StatusBadge>} />
+      <div className="discovery-actions">
+        <button className="button secondary" type="button" onClick={runAnalysis} disabled={analyzing || project.references.length === 0}>
+          <Icon name="spark" size={16} />{analyzing ? 'Menganalisis...' : 'Jalankan analisis'}
+        </button>
+        <span className="discovery-meta">{project.references.length} reference · {project.questions.length} question slot</span>
+      </div>
+      {error && <p className="live-message error" aria-live="polite">{error}</p>}
+      {project.aiWarnings?.length > 0 && <p className="live-message" aria-live="polite">Peringatan AI: {project.aiWarnings.join(' · ')}</p>}
       <section className="discovery-grid">
         {columns.map(([key, label, tone, description]) => <article className={`discovery-column ${tone}`} key={key}><div className="discovery-title"><div><p className="eyebrow">{label}</p><h2>{project.discovery[key].length} temuan</h2></div><StatusBadge tone={tone}>{label}</StatusBadge></div><p>{description}</p><ul>{project.discovery[key].map((item) => <li key={item}><span><Icon name={key === 'unknowns' ? 'alert' : 'check'} size={14} /></span>{item}</li>)}</ul></article>)}
       </section>
       <section className="question-slot-panel">
-        <div className="section-heading compact"><div><p className="eyebrow">Question slots</p><h2>18 slot diproses dari reference</h2></div><StatusBadge tone="green">18 answered</StatusBadge></div>
-        <div className="table-wrap"><table><thead><tr><th>ID</th><th>Slot</th><th>Source</th><th>Status</th></tr></thead><tbody>{project.questions.map((question) => <tr key={question.id}><td className="mono">{question.id}</td><td>{question.prompt}</td><td>{question.source}</td><td><StatusBadge tone={question.status === 'unknown' ? 'amber' : 'green'}>{question.status === 'unknown' ? 'Needs confirmation' : 'Answered'}</StatusBadge></td></tr>)}</tbody></table></div>
+        <div className="section-heading compact"><div><p className="eyebrow">Question slots</p><h2>{project.questions.length} slot diproses</h2></div><StatusBadge tone="green">{project.questions.filter((question) => describeAnswer(question)).length} answered</StatusBadge></div>
+        <div className="table-wrap"><table><thead><tr><th>ID</th><th>Slot</th><th>Source</th><th>Status</th></tr></thead><tbody>{project.questions.map((question) => <tr key={question.id}><td className="mono">{question.id}</td><td>{question.prompt}</td><td>{question.source}</td><td><StatusBadge tone={question.status === 'unknown' ? 'amber' : 'green'}>{describeAnswer(question) ? 'Answered' : 'Needs confirmation'}</StatusBadge></td></tr>)}</tbody></table></div>
       </section>
       <StepActions backTo="/planning/references" nextTo="/planning/questions" nextLabel="Review pertanyaan" />
     </>
@@ -145,7 +205,7 @@ export function DiscoveryPage({ project }) {
 
 export function QuestionsPage({ project, setProject }) {
   const groups = [...new Set(project.questions.map((question) => question.group))]
-  const processed = project.questions.filter((question) => question.answer.trim() || question.status === 'unknown').length
+  const processed = project.questions.filter((question) => describeAnswer(question).trim() || question.status === 'unknown').length
   const progress = Math.round((processed / project.questions.length) * 100)
 
   function updateQuestion(id, patch) {
@@ -154,7 +214,7 @@ export function QuestionsPage({ project, setProject }) {
 
   return (
     <>
-      <PageHeader eyebrow="Langkah 3 · Questions" title="Review jawaban, bukan mengulang pertanyaan." description="Slot dari prompt/reference sudah terisi. Edit hanya bagian yang perlu dikoreksi atau tandai Needs confirmation." />
+      <PageHeader eyebrow="Langkah 3 · Questions" title="Pilih atau tulis jawaban." description="Pilihan ganda mempercepat; Lainnya membuka essay. Tidak tahu sekarang mengisi Needs confirmation." />
       <section className="question-progress" aria-label={`${processed} dari ${project.questions.length} slot diproses`}>
         <div><strong>{processed} / {project.questions.length} slot diproses</strong><span>{progress}%</span></div>
         <div className="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress}><motion.span initial={{ width: 0 }} animate={{ width: `${progress}%` }} /></div>
@@ -162,11 +222,57 @@ export function QuestionsPage({ project, setProject }) {
       <div className="question-groups">
         {groups.map((group, groupIndex) => {
           const questions = project.questions.filter((question) => question.group === group)
-          return <details className="question-group" key={group} open={groupIndex === 0 ? true : undefined}><summary><span><strong>{group}</strong><small>{questions.length} slot</small></span><Icon name="chevron" /></summary><div className="question-list">{questions.map((question) => <article className="question-card" key={question.id}><div className="question-card-head"><div><span className="mono">{question.id}</span><h3>{question.prompt}</h3></div><StatusBadge tone={question.status === 'unknown' ? 'amber' : question.status === 'manual' ? 'blue' : 'green'}>{question.status === 'unknown' ? 'Needs confirmation' : question.status === 'manual' ? 'Diedit manual' : 'Terjawab dari referensi'}</StatusBadge></div><label htmlFor={`answer-${question.id}`}>Jawaban</label><textarea id={`answer-${question.id}`} rows="2" value={question.answer} onChange={(event) => updateQuestion(question.id, { answer: event.target.value, status: 'manual' })} placeholder="Masukkan jawaban atau gunakan Needs confirmation" /><div className="question-meta"><span>Source: {question.source}</span><button type="button" className="text-button" onClick={() => updateQuestion(question.id, { answer: 'Needs confirmation', status: 'unknown' })}>Tidak tahu sekarang</button></div></article>)}</div></details>
+          return <details className="question-group" key={group} open={groupIndex === 0 ? true : undefined}><summary><span><strong>{group}</strong><small>{questions.length} slot</small></span><Icon name="chevron" /></summary><div className="question-list">{questions.map((question) => <QuestionCard key={question.id} question={question} onChange={(patch) => updateQuestion(question.id, patch)} />)}</div></details>
         })}
       </div>
       <StepActions backTo="/planning/discovery" nextTo="/planning/structure" nextLabel="Susun struktur" disabled={processed < 15} />
     </>
+  )
+}
+
+function QuestionCard({ question, onChange }) {
+  const inputId = `answer-${question.id}`
+  const otherId = `other-${question.id}`
+  const tone = question.status === 'unknown' ? 'amber' : question.status === 'manual' || question.status === 'reference' ? 'green' : 'neutral'
+  const label = question.status === 'unknown' ? 'Needs confirmation' : question.status === 'manual' ? 'Diedit manual' : question.status === 'reference' ? 'Terjawab dari referensi' : 'Belum dijawab'
+  const isOther = question.answer === '__other__'
+
+  return (
+    <article className="question-card">
+      <div className="question-card-head">
+        <div><span className="mono">{question.id}</span><h3>{question.prompt}</h3></div>
+        <StatusBadge tone={tone}>{label}</StatusBadge>
+      </div>
+      {question.type === 'choice' ? (
+        <div className="choice-list" role="radiogroup" aria-labelledby={inputId}>
+          <span id={inputId} className="sr-only">{question.prompt}</span>
+          {question.options.map((option) => (
+            <label key={option} className={`choice-option${question.answer === option ? ' selected' : ''}`}>
+              <input type="radio" name={inputId} value={option} checked={question.answer === option} onChange={() => onChange({ answer: option, otherAnswer: '', status: 'manual' })} />
+              <span>{option}</span>
+            </label>
+          ))}
+          {question.allowOther && (
+            <label className={`choice-option${isOther ? ' selected' : ''}`}>
+              <input type="radio" name={inputId} value="__other__" checked={isOther} onChange={() => onChange({ answer: '__other__', status: 'manual' })} />
+              <span>Lainnya</span>
+            </label>
+          )}
+          {isOther && (
+            <div className="choice-other">
+              <label htmlFor={otherId} className="sr-only">Jawaban lainnya</label>
+              <textarea id={otherId} rows="2" value={question.otherAnswer} onChange={(event) => onChange({ otherAnswer: event.target.value, status: 'manual' })} placeholder="Tulisan singkat" />
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
+          <label htmlFor={inputId}>Jawaban</label>
+          <textarea id={inputId} rows="2" value={question.answer} onChange={(event) => onChange({ answer: event.target.value, status: 'manual' })} placeholder="Masukkan jawaban atau gunakan Needs confirmation" />
+        </>
+      )}
+      <div className="question-meta"><span>Source: {question.source}</span><button type="button" className="text-button" onClick={() => onChange({ answer: 'Needs confirmation', otherAnswer: '', status: 'unknown' })}>Tidak tahu sekarang</button></div>
+    </article>
   )
 }
 
@@ -214,12 +320,12 @@ export function PreviewPage({ project }) {
   const [selected, setSelected] = useState('docs/planning/README.md')
   return (
     <>
-      <PageHeader eyebrow="Langkah 5 · Preview" title="Periksa paket planning sebelum generate." description="Buka tree, pilih file, dan review matrix test. Konten ini adalah preview demo dari local state." />
+      <PageHeader eyebrow="Langkah 5 · Preview" title="Periksa paket planning sebelum generate." description="Buka tree, pilih file, dan review matrix. Konten ini dihasilkan dari local state." />
       <div className="preview-layout">
         <section className="tree-panel"><div className="panel-heading"><div><p className="eyebrow">File tree</p><h2>docs/planning/</h2></div><StatusBadge tone="blue">6 file ZIP</StatusBadge></div><PlanningTree nodes={previewTree} selected={selected} onSelect={setSelected} /></section>
         <section className="markdown-panel"><div className="markdown-toolbar"><span className="mono">{selected}</span><StatusBadge tone="green">Preview</StatusBadge></div><pre className="markdown-preview">{files[selected] || '# Preview belum tersedia\n\nFile ini menjadi bagian struktur lengkap planning repository.'}</pre></section>
       </div>
-      <section className="review-notes"><article><StatusBadge tone="amber">Unknown</StatusBadge><p>{project.discovery.unknowns.length} keputusan future phase tetap ditandai sebagai Unknown.</p></article><article><StatusBadge tone="blue">Assumption</StatusBadge><p>Discovery dan generation adalah simulasi lokal, bukan output AI nyata.</p></article></section>
+      <section className="review-notes"><article><StatusBadge tone="amber">Unknown</StatusBadge><p>{project.discovery.unknowns.length} keputusan future phase tetap ditandai sebagai Unknown.</p></article><article><StatusBadge tone="blue">Assumption</StatusBadge><p>Discovery dan generation memakai AI optional; workflow tetap berjalan tanpa AI.</p></article></section>
       <section className="test-matrix-panel"><div className="section-heading compact"><div><p className="eyebrow">Test matrix</p><h2>Cakupan planning</h2></div><span>{project.modules.length} module · {countMenus(project.modules)} menu · 5 complex scenario</span></div><div className="table-wrap"><table><thead><tr><th>Area</th><th>Module plan</th><th>Menu plan</th><th>Baseline</th><th>Complex scenario</th></tr></thead><tbody><tr><td>Planning workflow</td><td>{project.modules.length}</td><td>{countMenus(project.modules)}</td><td>4</td><td>5</td></tr></tbody></table></div></section>
       <StepActions backTo="/planning/structure" nextTo="/planning/generate" nextLabel="Generate planning" />
     </>
@@ -254,13 +360,13 @@ export function GeneratePage({ project, setProject }) {
   const progress = Math.round((completed / generationSteps.length) * 100)
   return (
     <>
-      <PageHeader eyebrow="Langkah 6 · Generate" title="Menyusun paket planning di browser." description="Progress deterministic. Tidak ada network request, backend, atau analisis AI nyata." actions={<StatusBadge tone={project.generationStatus === 'success' ? 'green' : 'blue'}>{project.generationStatus === 'success' ? 'Selesai' : 'Memproses lokal'}</StatusBadge>} />
+      <PageHeader eyebrow="Langkah 6 · Generate" title="Menyusun paket planning di browser." description="Progress deterministic. Bila AI aktif, analisis reference sudah dilakukan di Discovery." actions={<StatusBadge tone={project.generationStatus === 'success' ? 'green' : 'blue'}>{project.generationStatus === 'success' ? 'Selesai' : 'Memproses lokal'}</StatusBadge>} />
       <section className="generation-card">
         <div className="generation-visual"><motion.div className="generation-ring" animate={{ rotate: project.generationStatus === 'success' ? 0 : 360 }} transition={{ duration: 1.8, repeat: project.generationStatus === 'success' ? 0 : Infinity, ease: 'linear' }}><Icon name={project.generationStatus === 'success' ? 'check' : 'spark'} size={30} /></motion.div><div><strong>{progress}%</strong><span>{completed} dari {generationSteps.length} step</span></div></div>
         <div className="progress-track large"><motion.span animate={{ width: `${progress}%` }} /></div>
         <ol className="generation-steps">{project.generationSteps.map((step, index) => <li key={step.label} className={step.status}><span className="step-state">{step.status === 'done' ? <Icon name="check" size={15} /> : index + 1}</span><div><strong>{step.label}</strong><small>{step.status === 'done' ? 'Selesai' : step.status === 'active' ? 'Sedang diproses' : 'Menunggu'}</small></div></li>)}</ol>
       </section>
-      <div className="generation-note"><Icon name="alert" size={16} />Jangan tutup tab selama simulasi singkat. Reduced-motion preference tetap menampilkan perubahan status tanpa bergantung pada transform.</div>
+      <div className="generation-note"><Icon name="alert" size={16} />Reduced-motion tetap menampilkan perubahan status tanpa bergantung pada transform.</div>
       <StepActions backTo="/planning/preview" />
     </>
   )
@@ -295,7 +401,7 @@ export function SuccessPage({ project, resetProject }) {
 
   return (
     <>
-      <section className="success-hero"><motion.div className="success-mark" initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}><Icon name="check" size={34} /></motion.div><p className="eyebrow">Generation complete</p><h1>Paket planning siap.</h1><p>Semua file dibuat di browser berdasarkan local state. Tidak ada data yang dikirim ke server.</p></section>
+      <section className="success-hero"><motion.div className="success-mark" initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}><Icon name="check" size={34} /></motion.div><p className="eyebrow">Generation complete</p><h1>Paket planning siap.</h1><p>Semua file dibuat di browser berdasarkan local state. Reference mentah tidak ikut diarchive.</p></section>
       <section className="success-summary"><div><span>Module</span><strong>{project.modules.length}</strong></div><div><span>Menu</span><strong>{menus}</strong></div><div><span>Test plan</span><strong>{testPlans}</strong></div><div><span>Scenario</span><strong>5</strong></div><div><span>Unknown</span><strong>{project.discovery.unknowns.length}</strong></div></section>
       <section className="download-card"><div><span className="download-icon"><Icon name="download" size={25} /></span><div><h2>magnetstructure-planning.zip</h2><p>Valid ZIP · 6 whitelist file · tanpa reference mentah</p></div></div><button className="button primary large" type="button" onClick={download}><Icon name="download" />Download ZIP</button></section>
       <p className="live-message success-message" aria-live="polite">{message}</p>
@@ -304,5 +410,3 @@ export function SuccessPage({ project, resetProject }) {
     </>
   )
 }
-
-
