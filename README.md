@@ -20,11 +20,11 @@ npm run smoke
 ## Upload categories
 
 - `prd`: text, PDF, image.
-- `design`: format PRD plus ZIP (mis. export Figma).
+- `design`: format PRD plus ZIP/RAR (mis. export Figma).
 - `api`: OpenAPI/Swagger YAML atau JSON. Optional.
-- `project`: ZIP source code untuk membaca struktur folder.
+- `project`: ZIP/RAR source code untuk membaca struktur folder.
 
-ZIP diproses dengan safe whitelist: `node_modules`, `.git`, `.env*`, `*.key`, `*.pem`, dan path traversal di-skip.
+ZIP/RAR diproses dengan safe whitelist: `node_modules`, `.git`, `.env*`, `*.key`, `*.pem`, dan path traversal di-skip.
 
 ## Optional AI analysis
 

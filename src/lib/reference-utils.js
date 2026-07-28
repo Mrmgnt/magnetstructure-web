@@ -12,9 +12,9 @@ const imageExtensionPattern = /\.(?:png|jpe?g|webp|gif|svg)$/i
 
 export const ACCEPTED_EXTENSIONS = {
   prd: ['.md', '.markdown', '.txt', '.pdf', '.png', '.jpg', '.jpeg', '.webp'],
-  design: ['.md', '.markdown', '.txt', '.pdf', '.png', '.jpg', '.jpeg', '.webp', '.zip'],
+  design: ['.md', '.markdown', '.txt', '.pdf', '.png', '.jpg', '.jpeg', '.webp', '.zip', '.rar'],
   api: ['.yaml', '.yml', '.json'],
-  project: ['.zip'],
+  project: ['.zip', '.rar'],
 }
 
 export function acceptedExtensions(category) { return ACCEPTED_EXTENSIONS[category] || [] }

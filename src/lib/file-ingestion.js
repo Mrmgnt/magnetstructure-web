@@ -1,4 +1,6 @@
-import JSZip from 'jszip'
+﻿import JSZip from 'jszip'
+import { createExtractorFromData } from 'node-unrar-js/esm/index.esm.js'
+import rarWasmUrl from 'node-unrar-js/esm/js/unrar.wasm?url'
 import * as pdfjsLib from 'pdfjs-dist'
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { MAX_ARCHIVE_ENTRIES, MAX_ARCHIVE_TEXT_BYTES, MAX_ARCHIVE_UNCOMPRESSED_BYTES, MAX_FILE_BYTES, MAX_TEXT_BYTES, formatBytes, hasSensitivePattern, isAllowedFile, isBlockedArchivePath, isImagePath, isTextLikePath } from './reference-utils'
@@ -119,6 +121,80 @@ async function extractZip(file) {
   }
 }
 
+let rarWasmBinaryPromise
+
+function loadRarWasmBinary() {
+  if (!rarWasmBinaryPromise) {
+    rarWasmBinaryPromise = fetch(rarWasmUrl).then(async (response) => {
+      if (!response.ok) throw new Error('WASM RAR tidak dapat dimuat.')
+      return response.arrayBuffer()
+    })
+  }
+  return rarWasmBinaryPromise
+}
+
+async function extractRar(file) {
+  const extractor = await createExtractorFromData({
+    data: await file.arrayBuffer(),
+    wasmBinary: await loadRarWasmBinary(),
+  })
+  const entries = [...extractor.getFileList().fileHeaders]
+  if (entries.length > MAX_ARCHIVE_ENTRIES) throw new Error(`RAR memiliki lebih dari ${MAX_ARCHIVE_ENTRIES} entry.`)
+
+  let uncompressedBytes = 0
+  for (const entry of entries) {
+    uncompressedBytes += Number(entry.unpSize) || 0
+    if (uncompressedBytes > MAX_ARCHIVE_UNCOMPRESSED_BYTES) throw new Error('Ukuran hasil extract RAR melewati batas aman 100 MB.')
+  }
+
+  let textBytes = 0
+  const includedEntries = []
+  const textParts = []
+  const imageData = []
+  const safePaths = []
+  const seenPaths = new Set()
+  let ignoredEntries = 0
+
+  for (const entry of entries) {
+    const path = entry.name.replaceAll('\\', '/')
+    const isDuplicate = seenPaths.has(path)
+    seenPaths.add(path)
+    const isSafe = !entry.flags.directory && !entry.flags.encrypted && !isBlockedArchivePath(path) && !isDuplicate
+    const isUsableImage = isImagePath(path) && (Number(entry.unpSize) || 0) <= 8 * 1024 * 1024
+    if (!isSafe || (!isTextLikePath(path) && !isUsableImage)) {
+      ignoredEntries += 1
+      continue
+    }
+    safePaths.push(entry.name)
+  }
+
+  const extracted = [...extractor.extract({ files: safePaths }).files]
+  for (const entry of extracted) {
+    const path = entry.fileHeader.name.replaceAll('\\', '/')
+    const bytes = entry.extraction || new Uint8Array()
+
+    if (isTextLikePath(path) && textBytes < MAX_ARCHIVE_TEXT_BYTES) {
+      const available = Math.min(bytes.byteLength, MAX_ARCHIVE_TEXT_BYTES - textBytes)
+      const text = decodeText(bytes.slice(0, available))
+      textBytes += available
+      textParts.push(`FILE: ${path}\n${text}`)
+      includedEntries.push({ path, kind: 'text', size: bytes.byteLength })
+    } else if (isImagePath(path) && imageData.length < 4) {
+      const image = await resizeImageBlob(new Blob([bytes], { type: mimeFromPath(path) }))
+      if (image) imageData.push(image)
+      includedEntries.push({ path, kind: 'image', size: bytes.byteLength })
+    } else {
+      ignoredEntries += 1
+    }
+  }
+
+  return {
+    text: textParts.join('\n\n').slice(0, MAX_ARCHIVE_TEXT_BYTES),
+    imageData,
+    archive: { entryCount: entries.length, uncompressedBytes, ignoredEntries, includedEntries },
+  }
+}
+
 export async function processReferenceFile(file, category, id) {
   if (file.size > MAX_FILE_BYTES) throw new Error(`${file.name} melebihi batas ${formatBytes(MAX_FILE_BYTES)}.`)
   if (!isAllowedFile(file, category)) throw new Error(`Format ${file.name} tidak sesuai kategori ${category}.`)
@@ -142,6 +218,9 @@ export async function processReferenceFile(file, category, id) {
 
   if (lowerName.endsWith('.zip')) {
     const extracted = await extractZip(file)
+    Object.assign(result, { ...extracted, warningMessage: extracted.archive.ignoredEntries ? `${extracted.archive.ignoredEntries} entry di-skip oleh safe whitelist.` : '' })
+  } else if (lowerName.endsWith('.rar')) {
+    const extracted = await extractRar(file)
     Object.assign(result, { ...extracted, warningMessage: extracted.archive.ignoredEntries ? `${extracted.archive.ignoredEntries} entry di-skip oleh safe whitelist.` : '' })
   } else if (lowerName.endsWith('.pdf')) {
     const extracted = await extractPdf(file)
