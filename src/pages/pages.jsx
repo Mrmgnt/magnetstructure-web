@@ -150,6 +150,11 @@ export function DiscoveryPage({ project, setProject }) {
   const [analyzing, setAnalyzing] = useState(false)
   const [error, setError] = useState('')
 
+  function useLocalAnalysis() {
+    setError('')
+    setProject((current) => ({ ...current, aiMode: 'local', aiWarnings: [] }))
+  }
+
   async function runAnalysis() {
     setAnalyzing(true)
     setError('')
@@ -166,7 +171,7 @@ export function DiscoveryPage({ project, setProject }) {
         },
       }))
     } catch (analysisError) {
-      setError(analysisError.code === 'AI_NOT_CONFIGURED' ? '' : analysisError.message)
+      setError(`${analysisError.message} Analisis lokal tetap dipakai.`)
       setProject((current) => ({ ...current, aiMode: 'local', aiWarnings: [] }))
     } finally {
       setAnalyzing(false)
@@ -185,8 +190,9 @@ export function DiscoveryPage({ project, setProject }) {
       <PageHeader eyebrow="Langkah 2 · Discovery" title="Pisahkan yang pasti dari yang belum diketahui." description="Buka Analisis AI bila Vercel env sudah diisi. Tanpa konfigurasi AI, gunakan analisis lokal." actions={<StatusBadge tone={modeBadge.tone}>{modeBadge.label}</StatusBadge>} />
       <div className="discovery-actions">
         <button className="button secondary" type="button" onClick={runAnalysis} disabled={analyzing || project.references.length === 0}>
-          <Icon name="spark" size={16} />{analyzing ? 'Menganalisis...' : 'Jalankan analisis'}
+          <Icon name="spark" size={16} />{analyzing ? 'Menganalisis...' : 'Jalankan analisis AI'}
         </button>
+        <button className="button ghost" type="button" onClick={useLocalAnalysis} disabled={analyzing}>Gunakan analisis lokal</button>
         <span className="discovery-meta">{project.references.length} reference · {project.questions.length} question slot</span>
       </div>
       {error && <p className="live-message error" aria-live="polite">{error}</p>}

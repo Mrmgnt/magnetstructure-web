@@ -1,10 +1,13 @@
 import { MAX_AI_PAYLOAD_BYTES } from './reference-utils.js'
 
+export const MAX_AI_TEXT_EVIDENCE_CHARS = 60000
+export const MAX_AI_IMAGE_EVIDENCE_COUNT = 2
+
 function utf8Size(value) {
   return new TextEncoder().encode(value).byteLength
 }
 
-function compactReference(reference, textLimit = 180000) {
+function compactReference(reference, textLimit) {
   return {
     id: reference.id,
     category: reference.category,
@@ -12,23 +15,34 @@ function compactReference(reference, textLimit = 180000) {
     mimeType: reference.type,
     size: reference.size,
     text: (reference.extractedText || '').slice(0, textLimit),
-    imageData: (reference.imageData || []).slice(0, 2),
+    imageData: (reference.imageData || []).slice(0, 1),
     archive: reference.archive ? {
       entryCount: reference.archive.entryCount,
       ignoredEntries: reference.archive.ignoredEntries,
-      includedEntries: reference.archive.includedEntries.slice(0, 80),
+      includedEntries: (reference.archive.includedEntries || []).slice(0, 80),
     } : null,
   }
 }
 
+function compactReferences(references) {
+  let textRemaining = MAX_AI_TEXT_EVIDENCE_CHARS
+  let imagesRemaining = MAX_AI_IMAGE_EVIDENCE_COUNT
+
+  return references.map((reference, index) => {
+    const referenceCountRemaining = references.length - index
+    const textLimit = Math.min(24000, Math.floor(textRemaining / referenceCountRemaining))
+    const compact = compactReference(reference, textLimit)
+    textRemaining -= compact.text.length
+    const imageData = imagesRemaining > 0 ? compact.imageData.slice(0, 1) : []
+    imagesRemaining -= imageData.length
+    return { ...compact, imageData }
+  })
+}
+
 export function buildAiPayload(project, kind = 'discovery') {
-  let references = project.references.map((reference) => compactReference(reference))
+  let references = compactReferences(project.references)
   let payload = { kind, references, questionSlots: project.questions.map(({ id, group, prompt, type, options, answer, otherAnswer, status }) => ({ id, group, prompt, type, options, answer, otherAnswer, status })) }
 
-  if (utf8Size(JSON.stringify(payload)) > MAX_AI_PAYLOAD_BYTES) {
-    references = project.references.map((reference) => compactReference(reference, 50000))
-    payload = { ...payload, references }
-  }
   if (utf8Size(JSON.stringify(payload)) > MAX_AI_PAYLOAD_BYTES) {
     references = references.map((reference) => ({ ...reference, imageData: [] }))
     payload = { ...payload, references }

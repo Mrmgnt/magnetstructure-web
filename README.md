@@ -38,7 +38,7 @@ ROUTER9_VISION_MODEL=
 AI_ANALYSIS_ENABLED=true
 ```
 
-`ROUTER9_BASE_URL` dianggap endpoint OpenAI-compatible. API key hanya dibaca server-side oleh `/api/analyze`. Tanpa env ini, workflow tetap berjalan dengan analisis lokal.
+`ROUTER9_BASE_URL` harus endpoint OpenAI-compatible yang berakhir dengan `/v1`; `ROUTER9_MODEL` harus exact provider-prefixed model ID dari endpoint `/v1/models`. API key hanya dibaca server-side oleh `/api/analyze`. Tanpa env ini, workflow tetap berjalan dengan analisis lokal.
 
 ## Vercel deployment
 
